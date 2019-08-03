@@ -150,6 +150,8 @@ typedef struct UIScene {
   bool gps_planner_active;
 
   bool is_playing_alert;
+
+  float curTime;
 } UIScene;
 
 typedef struct UIState {
@@ -243,6 +245,8 @@ typedef struct UIState {
   float light_sensor;
 } UIState;
 
+#include "./dashcam.h"
+
 static int last_brightness = -1;
 static void set_brightness(UIState *s, int brightness) {
   if (last_brightness != brightness && (s->awake || brightness == 0)) {
@@ -258,7 +262,7 @@ static void set_brightness(UIState *s, int brightness) {
 static void set_awake(UIState *s, bool awake) {
   if (awake) {
     // 30 second timeout at 30 fps
-    s->awake_timeout = 30*30;
+    s->awake_timeout = 5*30;
   }
   if (s->awake != awake) {
     s->awake = awake;
@@ -380,7 +384,7 @@ sound_file sound_table[] = {
   { "chimeEngage", "../assets/sounds/engaged.wav", false },
   { "chimeWarning1", "../assets/sounds/warning_1.wav", false },
   { "chimeWarning2", "../assets/sounds/warning_2.wav", false },
-  { "chimeWarningRepeat", "../assets/sounds/warning_2.wav", true },
+  { "chimeWarningRepeat", "../assets/sounds/warning_2.wav", false },
   { "chimeError", "../assets/sounds/error.wav", false },
   { "chimePrompt", "../assets/sounds/error.wav", false },
   { NULL, NULL, false },
@@ -951,6 +955,9 @@ static void ui_draw_vision_maxspeed(UIState *s) {
     speed_lim_off = s->speed_lim_off * 3.6 + 0.5;
   }
 
+  char curTime_str[32];
+  float curTime = s->scene.curTime;
+
   bool is_cruise_set = (maxspeed != 0 && maxspeed != SET_SPEED_NA);
   bool is_speedlim_valid = s->scene.speedlimit_valid;
   bool is_set_over_limit = is_speedlim_valid && s->scene.engaged &&
@@ -1008,11 +1015,14 @@ static void ui_draw_vision_maxspeed(UIState *s) {
     nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 255));
     nvgText(s->vg, viz_maxspeed_x+(viz_maxspeed_xo/2)+(viz_maxspeed_w/2), 242, maxspeed_str, NULL);
   } else {
-    nvgFontFace(s->vg, "sans-semibold");
-    nvgFontSize(s->vg, 42*2.5);
+    nvgFontFace(s->vg, "sans-bold");
+    nvgFontSize(s->vg, 28*2.5);
+    snprintf(curTime_str, sizeof(curTime_str), "%f", curTime);
     nvgFillColor(s->vg, nvgRGBA(255, 255, 255, 100));
-    nvgText(s->vg, viz_maxspeed_x+(viz_maxspeed_xo/2)+(viz_maxspeed_w/2), 242, "N/A", NULL);
+    nvgText(s->vg, viz_maxspeed_x+(viz_maxspeed_xo/2)+(viz_maxspeed_w/2) + 50, 242, curTime_str, NULL);
   }
+
+  draw_date_time(s);
 }
 
 static void ui_draw_vision_speedlimit(UIState *s) {
@@ -1519,7 +1529,7 @@ static void ui_update(UIState *s) {
         polls[3].revents || polls[4].revents || polls[6].revents ||
         polls[7].revents || polls[8].revents) {
       // awake on any (old) activity
-      set_awake(s, true);
+      //set_awake(s, true);
     }
 
     if (s->vision_connected && polls[9].revents) {
@@ -1531,6 +1541,7 @@ static void ui_update(UIState *s) {
         close(s->ipc_fd);
         s->ipc_fd = -1;
         s->vision_connected = false;
+        set_awake(s, true);
         continue;
       }
       if (rp.type == VIPC_STREAM_ACQUIRE) {
@@ -1621,8 +1632,40 @@ static void ui_update(UIState *s) {
         s->scene.engageable = datad.engageable;
         s->scene.gps_planner_active = datad.gpsPlannerActive;
         s->scene.monitoring_active = datad.driverMonitoringOn;
+        s->scene.curTime = datad.curTime;
 
         s->scene.frontview = datad.rearViewCam;
+
+        // if ((int)datad.curTime % 100 > 0 && (int)datad.curTime % 100 < 20 ) {
+        //   char* error = NULL;
+        //   if (s->alert_sound[0] != '\0') {
+        //     sound_file* active_sound = get_sound_file_by_name("chimeWarningRepeat");
+        //     slplay_stop_uri(active_sound->uri, &error);
+        //     if (error) {
+        //       LOGW("error stopping active sound %s", error);
+        //     }
+        //   }
+
+        //   sound_file* sound = get_sound_file_by_name("chimeWarningRepeat");
+        //   slplay_play(sound->uri, sound->loop, &error);
+        //   if(error) {
+        //     LOGW("error playing sound: %s", error);
+        //   }
+
+        //   snprintf(s->alert_sound, sizeof(s->alert_sound), "%s", "chimeWarningRepeat");
+        //   snprintf(s->alert_type, sizeof(s->alert_type), "%s", datad.alertType.str);
+        // } else if ((int)datad.curTime % 100 > 35 && (int)datad.curTime % 100 < 65 && s->alert_sound[0] != '\0') {
+        //   sound_file* sound = get_sound_file_by_name("chimeWarningRepeat");
+
+        //   char* error = NULL;
+
+        //   slplay_stop_uri(sound->uri, &error);
+        //   if(error) {
+        //     LOGW("error stopping sound: %s", error);
+        //   }
+        //   s->alert_type[0] = '\0';
+        //   s->alert_sound[0] = '\0';
+        // }
 
         if (datad.alertSound.str && datad.alertSound.str[0] != '\0' && strcmp(s->alert_type, datad.alertType.str) != 0) {
           char* error = NULL;
@@ -2040,6 +2083,7 @@ int main() {
     }
 
     if (s->awake) {
+      dashcam(s, touch_x, touch_y);
       ui_draw(s);
       glFinish();
       should_swap = true;
@@ -2073,6 +2117,7 @@ int main() {
     }
   }
 
+  // TODO. disable here
   set_awake(s, true);
 
   slplay_destroy();

@@ -20,6 +20,9 @@ from selfdrive.controls.lib.speed_smoother import speed_smoother
 from selfdrive.controls.lib.longcontrol import LongCtrlState, MIN_CAN_SPEED
 from selfdrive.controls.lib.radar_helpers import _LEAD_ACCEL_TAU
 
+import datetime as dt
+import logging
+
 # Max lateral acceleration, used to caclulate how much to slow down in turns
 A_Y_MAX = 2.0  # m/s^2
 NO_CURVATURE_SPEED = 200. * CV.MPH_TO_MS
@@ -76,6 +79,10 @@ def limit_accel_in_turns(v_ego, angle_steers, a_target, CP):
 
 class FCWChecker(object):
   def __init__(self):
+    filename = '/tmp/fcw_' + dt.datetime.now().strftime('%Y%m%d-%H%M') + '.log'
+    # logging.basicConfig(level=logging.DEBUG, filename=filename, filemode="a+",
+                        # format="%(asctime)-15s %(levelname)-8s %(message)s")
+    logging.info("FCWChecker __init__")
     self.reset_lead(0.0)
 
   def reset_lead(self, cur_time):
@@ -103,11 +110,15 @@ class FCWChecker(object):
     # delta of the quadratic equation to solve for ttc
     delta = v_rel**2 + 2 * x_lead * a_rel
 
+    logging.info("v_rel:{}, a_rel:{}, delta:{}".format(v_rel, a_rel, delta))
+
     # assign an arbitrary high ttc value if there is no solution to ttc
     if delta < 0.1 or (np.sqrt(delta) + v_rel < 0.1):
       ttc = max_ttc
+      logging.info("calc_ttc max_ttc:{}".format(ttc))
     else:
       ttc = np.minimum(2 * x_lead / (np.sqrt(delta) + v_rel), max_ttc)
+      logging.info("calc_ttc ttc:{}".format(ttc))
     return ttc
 
   def update(self, mpc_solution, cur_time, v_ego, a_ego, x_lead, v_lead, a_lead, y_lead, vlat_lead, fcw_lead, blinkers):
@@ -116,7 +127,10 @@ class FCWChecker(object):
     self.v_lead_max = max(self.v_lead_max, v_lead)
 
     if (fcw_lead > 0.99):
+      logging.info("cur_time:{} fcw_lead:{}".format(cur_time, fcw_lead))
+      logging.info("calc_ttc v_ego:{}, a_ego:{}, x_lead:{}, v_lead:{}, a_lead:{}".format(v_ego, a_ego, x_lead, v_lead, a_lead))
       ttc = self.calc_ttc(v_ego, a_ego, x_lead, v_lead, a_lead)
+      logging.info("ttc:{}".format(ttc))
       self.counters['v_ego'] = self.counters['v_ego'] + 1 if v_ego > 5.0 else 0
       self.counters['ttc'] = self.counters['ttc'] + 1 if ttc < 2.5 else 0
       self.counters['v_lead_max'] = self.counters['v_lead_max'] + 1 if self.v_lead_max > 2.5 else 0
@@ -129,10 +143,26 @@ class FCWChecker(object):
       a_thr = interp(v_lead, _FCW_A_ACT_BP, _FCW_A_ACT_V)
       a_delta = min(mpc_solution_a[:15]) - min(0.0, a_ego)
 
-      fcw_allowed = all(c >= 10 for c in self.counters.values())
-      if (self.last_min_a < -3.0 or a_delta < a_thr) and fcw_allowed and self.last_fcw_time + 5.0 < cur_time:
+      speed = v_ego * 2.2369363 + 0.5
+      speed_multiplier = 55.0/speed
+      last_min_a_threshold =  -3.0 * speed_multiplier
+      last_min_a_threshold = max(-12.0, last_min_a_threshold)
+      a_thr_threshold = a_thr * 1.1
+
+      logging.info("counters:{}".format(dict(self.counters)))
+      logging.info("self.last_min_a:{}, a_delta:{}, a_thr:{}, speed: {}, last_min_a_threshold: {}, a_thr_threshold:{}".format(self.last_min_a, a_delta, a_thr, speed, last_min_a_threshold, a_thr_threshold))
+      logging.info("self.last_fcw_time {}, cur_time:{}".format(self.last_fcw_time + 5.0, cur_time))
+
+      #fcw_allowed = all(c >= 10 for c in self.counters.values())
+      fcw_allowed = all([self.counters[y] >= 8  for y in [x for x in self.counters.keys() if x !='l'  and x!= 'blinkers' and  x != 'ttc' and x != 'v_lead_max' ]])
+      #if (self.last_min_a < -3.0 or a_delta < a_thr) and fcw_allowed and self.last_fcw_time + 5.0 < cur_time:
+      # try decreasing last_min_a to -4.0 to reduce FP
+
+      if (self.last_min_a < last_min_a_threshold or a_delta < a_thr_threshold) and fcw_allowed and self.last_fcw_time + 5.0 < cur_time:
         self.last_fcw_time = cur_time
         self.last_fcw_a = self.last_min_a
+        logging.info("FCW Triggered")
+        logging.info("self.last_min_a:{}, last_fcw_time:{}, a_delta:{}, a_thr:{}".format(self.last_min_a, self.last_fcw_time, a_delta, a_thr))
         return True
 
     return False
@@ -458,10 +488,11 @@ class Planner(object):
       self.fcw = self.fcw_checker.update(self.mpc1.mpc_solution, cur_time, CS.vEgo, CS.aEgo,
                                          self.lead_1.dRel, self.lead_1.vLead, self.lead_1.aLeadK,
                                          self.lead_1.yRel, self.lead_1.vLat,
-                                         self.lead_1.fcw, blinkers) \
-                 and not CS.brakePressed
+                                         self.lead_1.fcw, blinkers)
+      
       if self.fcw:
-        cloudlog.info("FCW triggered %s", self.fcw_checker.counters)
+        #cloudlog.info("FCW triggered %s", self.fcw_checker.counters)
+        logging.info("FCW Triggered below cloudlog")
 
     if cur_time - self.last_model > 0.5:
       self.model_dead = True
@@ -511,6 +542,7 @@ class Planner(object):
     # Send out fcw
     fcw = self.fcw and (self.fcw_enabled or LoC.long_control_state != LongCtrlState.off)
     plan_send.plan.fcw = fcw
+    plan_send.plan.curTime = cur_time
 
     self.plan.send(plan_send.to_bytes())
     return plan_send

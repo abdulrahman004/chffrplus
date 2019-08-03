@@ -28,6 +28,13 @@ from selfdrive.locationd.calibration_helpers import Calibration, Filter
 ThermalStatus = log.ThermalData.ThermalStatus
 State = log.Live100Data.ControlState
 
+import datetime as dt
+import logging
+
+filename = '/tmp/fcw_' + dt.datetime.now().strftime('%Y%m%d-%H%M') + '_alert_sent.log'
+# logging.basicConfig(level=logging.DEBUG, filename=filename, filemode="a+",
+                    # format="%(asctime)-15s %(levelname)-8s %(message)s")
+logging.info("Controlsd.py")
 
 def isActive(state):
   """Check if the actuators are enabled"""
@@ -244,7 +251,8 @@ def state_control(plan, CS, CP, state, events, v_cruise_kph, v_cruise_kph_last, 
 
   # send FCW alert if triggered by planner
   if plan.fcw:
-    AM.add("fcw", enabled)
+    #AM.add("fcw", enabled)
+    AM.add("fcw", True)
 
   # State specific actions
 
@@ -326,6 +334,12 @@ def data_send(perception_state, plan, plan_ts, CS, CI, CP, VM, state, events, ac
     # send car controls over can
     CI.apply(CC, perception_state)
 
+  alertSound = ""
+  if plan.fcw:
+    logging.info("currTime:{}, controlsd has fcw. sending it to ui.c. AM.alert_text_1:{}, AM.alert_text_2:{}, AM.alert_type:{}, AM.audible_alert:{}".format(plan.curTime, AM.alert_text_1, AM.alert_text_2, AM.alert_type, AM.audible_alert))
+    alertSound = "chimeWarningRepeat"
+
+
   # live100
   dat = messaging.new_message()
   dat.init('live100')
@@ -336,7 +350,7 @@ def data_send(perception_state, plan, plan_ts, CS, CI, CP, VM, state, events, ac
     "alertStatus": AM.alert_status,
     "alertBlinkingRate": AM.alert_rate,
     "alertType": AM.alert_type,
-    "alertSound": "",  # no EON sounds yet
+    "alertSound": alertSound,
     "awarenessStatus": max(driver_status.awareness, 0.0) if isEnabled(state) else 0.0,
     "driverMonitoringOn": bool(driver_status.monitor_on),
     "canMonoTimes": list(CS.canMonoTimes),
@@ -366,6 +380,7 @@ def data_send(perception_state, plan, plan_ts, CS, CI, CP, VM, state, events, ac
     "angleOffset": float(angle_offset),
     "gpsPlannerActive": plan.gpsPlannerActive,
     "cumLagMs": -rk.remaining * 1000.,
+    "curTime": float(plan.curTime),
   }
   live100.send(dat.to_bytes())
 
@@ -444,7 +459,8 @@ def controlsd_thread(gctx=None, rate=100, default_bias=0.):
     CP.safetyModel = car.CarParams.SafetyModels.noOutput
 
   # Get FCW toggle from settings
-  fcw_enabled = params.get("IsFcwEnabled") == "1"
+  #fcw_enabled = params.get("IsFcwEnabled") == "1"
+  fcw_enabled = True
   geofence = None
 
   PL = Planner(CP, fcw_enabled)

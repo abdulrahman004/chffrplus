@@ -424,6 +424,8 @@ struct Live100Data {
   vCurvature @46 :Float32;
   decelForTurn @47 :Bool;
 
+  curTime @48 :Float32;
+
   enum ControlState {
     disabled @0;
     preEnabled @1;
@@ -571,6 +573,8 @@ struct Plan {
   # maps
   vCurvature @21 :Float32;
   decelForTurn @22 :Bool;
+
+  curTime @23 :Float32;
 
   struct GpsTrajectory {
     x @0 :List(Float32);
